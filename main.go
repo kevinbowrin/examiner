@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"github.com/transitreport/gooctranspoapi"
 	"log"
 	"os"
 	"strings"
@@ -14,8 +15,8 @@ const (
 )
 
 var (
-	applicationID  = flag.String("id", "", "Application ID")
-	applicationKey = flag.String("key", "", "Application Key")
+	id  = flag.String("id", "", "Application ID")
+	key = flag.String("key", "", "Application Key")
 )
 
 func init() {
@@ -40,11 +41,17 @@ func main() {
 	overrideUnsetFlagsFromEnvironmentVariables()
 
 	// If any of the required flags are not set, exit.
-	if *applicationID == "" {
+	if *id == "" {
 		log.Fatal("FATAL: An Application ID is required.")
-	} else if *applicationKey == "" {
+	} else if *key == "" {
 		log.Fatal("FATAL: An Application Key is required.")
 	}
+
+	c, _ := gooctranspoapi.Setup(*id, *key)
+	data, err := c.GTFSAgency()
+
+	log.Println(data)
+	log.Println(err)
 }
 
 // If any flags are not set, use environment variables to set them.
