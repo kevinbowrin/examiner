@@ -10,7 +10,9 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,6 +33,16 @@ type calendadaterow struct {
 	service_id     string
 	date           string
 	exception_type string
+}
+
+type routetime struct {
+	route_short_name string
+	route_id         string
+	direction_id     string
+	trip_id          string
+	trip_headsign    string
+	arrival_time     string
+	stop_code        string
 }
 
 const (
@@ -88,18 +100,121 @@ func main() {
 		log.Fatalf("Error creating stop times, %v", err)
 	}
 
+	c := gooctranspoapi.NewConnection(*id, *key)
+
+	var wg sync.WaitGroup
+
 	for _, stopTime := range sample {
-		fmt.Println(stopTime)
+
+		hourAsInt, err := strconv.Atoi(stopTime.arrival_time[:2])
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if hourAsInt > 23 {
+			continue
+		}
+
+		now := time.Now()
+
+		arrival, err := time.Parse("2006-01-02 15:04:05 MST", now.Format("2006-01-02 ")+stopTime.arrival_time+" EDT")
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		checkAt := arrival.Add(-time.Minute * 5)
+
+		if now.Before(checkAt) {
+
+			wg.Add(1)
+			// Launch a goroutine to fetch the URL.
+			go func(waitUntil time.Time, stopTime routetime) {
+				defer wg.Done()
+
+				waitDur := waitUntil.Sub(time.Now())
+				time.Sleep(waitDur)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+
+				nextTrips, err := c.GetNextTripsForStop(ctx, stopTime.route_short_name, stopTime.stop_code)
+				if err != nil {
+					log.Fatalln(err)
+				}
+
+				for _, routedirection := range nextTrips.RouteDirections {
+					if strings.TrimSpace(routedirection.RouteNo) == strings.TrimSpace(stopTime.route_short_name) &&
+						strings.TrimSpace(routedirection.RouteLabel) == strings.TrimSpace(stopTime.trip_headsign) {
+						if len(routedirection.Trips) > 0 {
+							trip := routedirection.Trips[0]
+							fmt.Printf("%v %v at %v: %v (%v)\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, trip.AdjustedScheduleTime, trip.AdjustmentAge)
+						}
+					}
+				}
+
+			}(checkAt, stopTime)
+		}
+
 	}
 
-	c := gooctranspoapi.NewConnection(*id, *key)
-	data, err := c.GetGTFSAgency(context.TODO())
-
-	log.Println(data)
-	log.Println(err)
+	wg.Wait()
 }
 
-func getSampleOfStopTimes(dbfilepath string) ([]string, error) {
+func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
+
+	routetimes := []routetime{}
+
+	todayServices, err := getTodaysServices(dbfilepath)
+	if err != nil {
+		return []routetime{}, err
+	}
+
+	db, err := sql.Open("sqlite3", dbfilepath)
+	if err != nil {
+		return routetimes, err
+	}
+	defer db.Close()
+
+	ts := make([]interface{}, len(todayServices))
+	for i, v := range todayServices {
+		ts[i] = v
+	}
+
+	routetimequery := `
+        SELECT routes.route_short_name, trips.route_id, trips.direction_id, trips.trip_id, trips.trip_headsign, stop_times.arrival_time, stops.stop_code
+        FROM trips
+        LEFT JOIN stop_times
+        ON stop_times.trip_id = trips.trip_id
+        LEFT JOIN routes
+        ON routes.route_id = trips.route_id 
+        LEFT JOIN stops 
+        ON stops.stop_id = stop_times.stop_id
+        WHERE trips.service_id IN ` + "(?" + strings.Repeat(",?", len(ts)-1) + ")" + `
+        ORDER BY RANDOM() LIMIT 10000`
+
+	routetimerows, err := db.Query(routetimequery, ts...)
+	if err != nil {
+		return routetimes, err
+	}
+	defer routetimerows.Close()
+	for routetimerows.Next() {
+		var curRow routetime
+		err = routetimerows.Scan(&curRow.route_short_name, &curRow.route_id, &curRow.direction_id, &curRow.trip_id, &curRow.trip_headsign, &curRow.arrival_time, &curRow.stop_code)
+		if err != nil {
+			return routetimes, err
+		}
+		routetimes = append(routetimes, curRow)
+	}
+	err = routetimerows.Err()
+	if err != nil {
+		return routetimes, err
+	}
+
+	return routetimes, nil
+
+}
+
+func getTodaysServices(dbfilepath string) ([]string, error) {
 	db, err := sql.Open("sqlite3", dbfilepath)
 	if err != nil {
 		return []string{}, err
@@ -112,25 +227,28 @@ func getSampleOfStopTimes(dbfilepath string) ([]string, error) {
 
 	calRows, err := db.Query("SELECT service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date FROM calendar")
 	if err != nil {
-		log.Fatal(err)
+		return []string{}, err
 	}
 	defer calRows.Close()
 	for calRows.Next() {
 		var curRow calendarrow
 		err = calRows.Scan(&curRow.service_id, &curRow.monday, &curRow.tuesday, &curRow.wednesday, &curRow.thursday, &curRow.friday, &curRow.saturday, &curRow.sunday, &curRow.start_date, &curRow.end_date)
 		if err != nil {
-			log.Fatal(err)
+			return []string{}, err
 		}
 
-		start, err := time.Parse("20060102", curRow.start_date)
+		start, err := time.ParseInLocation("20060102", curRow.start_date, today.Location())
 		if err != nil {
-			log.Fatal(err)
+			return []string{}, err
 		}
 
-		end, err := time.Parse("20060102", curRow.end_date)
+		end, err := time.ParseInLocation("20060102", curRow.end_date, today.Location())
 		if err != nil {
-			log.Fatal(err)
+			return []string{}, err
 		}
+		end = end.Add(time.Hour * 23)
+		end = end.Add(time.Minute * 59)
+		end = end.Add(time.Second * 59)
 
 		if today.After(start) && today.Before(end) {
 			switch weekday {
@@ -167,19 +285,19 @@ func getSampleOfStopTimes(dbfilepath string) ([]string, error) {
 	}
 	err = calRows.Err()
 	if err != nil {
-		log.Fatal(err)
+		return []string{}, err
 	}
 
 	exceptions, err := db.Query("SELECT service_id,date,exception_type FROM calendar_dates WHERE date = ?", today.Format("20060102"))
 	if err != nil {
-		log.Fatal(err)
+		return []string{}, err
 	}
 	defer exceptions.Close()
 	for exceptions.Next() {
 		var curRow calendadaterow
 		err = exceptions.Scan(&curRow.service_id, &curRow.date, &curRow.exception_type)
 		if err != nil {
-			log.Fatal(err)
+			return []string{}, err
 		}
 		if curRow.exception_type == "2" {
 			for i, service_id := range todayServices {
@@ -192,7 +310,7 @@ func getSampleOfStopTimes(dbfilepath string) ([]string, error) {
 	}
 	err = exceptions.Err()
 	if err != nil {
-		log.Fatal(err)
+		return []string{}, err
 	}
 
 	return todayServices, nil

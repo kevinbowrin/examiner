@@ -1,14 +1,34 @@
-builds:
-  - env:
-      - CGO_ENABLED=0
-    goos: 
-      - windows
+
+builds: 
+  -
+    goos:
       - linux
       - darwin
+      - freebsd
+      - windows
+    goarch:
+      - 386
+      - amd64
+      - arm
+      - arm64
+    goarm:
+      - 6
+      - 7
 archive:
   replacements:
-    darwin: macOS 
+    darwin: macOS
+  wrap_in_directory: true
   format_overrides:
     - goos: windows
       format: zip
-  wrap_in_directory: true
+  files:
+    - LICENSE 
+    - gtfs.db
+    - rebuild_gtfs_db.sh
+checksum:
+  name_template: 'checksums.txt'
+changelog:
+  filters:
+    exclude:
+    - '^docs:'
+    - '^test:'
