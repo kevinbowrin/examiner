@@ -8,8 +8,6 @@ builds:
     goarch:
       - 386
       - amd64
-    env:
-      - CGO_ENABLED=1
 archive:
   replacements:
     darwin: macOS
