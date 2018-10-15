@@ -4,16 +4,10 @@ builds:
     goos:
       - linux
       - darwin
-      - freebsd
       - windows
     goarch:
       - 386
       - amd64
-      - arm
-      - arm64
-    goarm:
-      - 6
-      - 7
     env:
       - CGO_ENABLED=1
 archive:
