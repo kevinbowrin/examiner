@@ -54,6 +54,7 @@ var (
 	id  = flag.String("id", "", "Application ID")
 	key = flag.String("key", "", "Application Key")
 	db  = flag.String("db", "gtfs.db", "The file path for the sqlite3 db of GTFS data")
+	v   = flag.Bool("v", false, "Verbose output")
 	// A version flag, which should be overwritten when building using ldflags.
 	version = "devel"
 )
@@ -104,6 +105,10 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	addedToQueue := 0
+
+	fmt.Println("\"Route Number\", \"Headsign\", \"Stop Code\", \"Minutes Off Schedule\", \"Adjustment Age\"")
+
 	for _, stopTime := range sample {
 
 		hourAsInt, err := strconv.Atoi(stopTime.arrival_time[:2])
@@ -126,6 +131,8 @@ func main() {
 
 		if now.Before(checkAt) {
 
+			addedToQueue++
+
 			wg.Add(1)
 			// Launch a goroutine to fetch the URL.
 			go func(waitUntil time.Time, stopTime routetime) {
@@ -139,15 +146,30 @@ func main() {
 
 				nextTrips, err := c.GetNextTripsForStop(ctx, stopTime.route_short_name, stopTime.stop_code)
 				if err != nil {
-					log.Fatalln(err)
+					log.Printf("Error: %v\n", err)
+					log.Printf("Error: StopTime - %#v\n", stopTime)
+					return
 				}
 
 				for _, routedirection := range nextTrips.RouteDirections {
 					if strings.TrimSpace(routedirection.RouteNo) == strings.TrimSpace(stopTime.route_short_name) &&
 						strings.TrimSpace(routedirection.RouteLabel) == strings.TrimSpace(stopTime.trip_headsign) {
 						if len(routedirection.Trips) > 0 {
+
+							if *v {
+								log.Printf("StopTime: %#v\n", stopTime)
+								log.Printf("RouteDirection: %#v\n", routedirection)
+								log.Printf("Trips: %#v\n", routedirection.Trips)
+							}
+
 							trip := routedirection.Trips[0]
-							fmt.Printf("%v %v at %v: %v (%v)\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, trip.AdjustedScheduleTime, trip.AdjustmentAge)
+							if trip.AdjustedScheduleTime > 0 {
+								minus5 := trip.AdjustedScheduleTime - 5
+								fmt.Printf("%v,\"%v\",%v,%v,%v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, minus5, trip.AdjustmentAge)
+							} else {
+								fmt.Printf("%v,\"%v\",%v,%v,%v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, "unavailable", "unavailable")
+							}
+
 						}
 					}
 				}
@@ -155,6 +177,10 @@ func main() {
 			}(checkAt, stopTime)
 		}
 
+	}
+
+	if *v {
+		log.Printf("%v future API calls added to queue...\n", addedToQueue)
 	}
 
 	wg.Wait()
@@ -190,6 +216,8 @@ func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
         LEFT JOIN stops 
         ON stops.stop_id = stop_times.stop_id
         WHERE trips.service_id IN ` + "(?" + strings.Repeat(",?", len(ts)-1) + ")" + `
+        AND stop_times.stop_sequence != 1
+        AND stop_times.pickup_type != 1
         ORDER BY RANDOM() LIMIT 10000`
 
 	routetimerows, err := db.Query(routetimequery, ts...)
