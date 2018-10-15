@@ -163,7 +163,7 @@ func main() {
 							}
 
 							trip := routedirection.Trips[0]
-							if trip.AdjustedScheduleTime > 0 {
+							if trip.AdjustmentAge > 0 {
 								minus5 := trip.AdjustedScheduleTime - 5
 								fmt.Printf("%v,\"%v\",%v,%v,%v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, minus5, trip.AdjustmentAge)
 							} else {
