@@ -43,6 +43,8 @@ type routetime struct {
 	trip_headsign    string
 	arrival_time     string
 	stop_code        string
+	stop_lat         string
+	stop_lon         string
 }
 
 const (
@@ -107,7 +109,7 @@ func main() {
 
 	addedToQueue := 0
 
-	fmt.Println("\"Route Number\", \"Headsign\", \"Stop Code\", \"Minutes Off Schedule\", \"Adjustment Age\"")
+	fmt.Println("\"Request Time\",\"Route Number\",\"Headsign\",\"Stop Code\",\"Stop Lat\",\"Stop Lon\",\"Minutes Off Schedule\",\"Adjustment Age\"")
 
 	for _, stopTime := range sample {
 
@@ -173,9 +175,9 @@ func main() {
 							trip := routedirection.Trips[0]
 							if trip.AdjustmentAge > 0 {
 								minus5 := trip.AdjustedScheduleTime - 5
-								fmt.Printf("%v,\"%v\",%v,%v,%v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, minus5, trip.AdjustmentAge)
+								fmt.Printf("\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"\n", time.Now().Round(0).Round(time.Second), stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.stop_lat, stopTime.stop_lon, minus5, trip.AdjustmentAge)
 							} else {
-								fmt.Printf("%v,\"%v\",%v,%v,%v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, "unavailable", "unavailable")
+								fmt.Printf("\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"\n", time.Now().Round(0).Round(time.Second), stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.stop_lat, stopTime.stop_lon, "unavailable", "unavailable")
 							}
 
 						}
@@ -215,7 +217,7 @@ func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
 	}
 
 	routetimequery := `
-        SELECT routes.route_short_name, trips.route_id, trips.direction_id, trips.trip_id, trips.trip_headsign, stop_times.arrival_time, stops.stop_code
+        SELECT routes.route_short_name, trips.route_id, trips.direction_id, trips.trip_id, trips.trip_headsign, stop_times.arrival_time, stops.stop_code, stops.stop_lat, stops.stop_lon
         FROM trips
         LEFT JOIN stop_times
         ON stop_times.trip_id = trips.trip_id
@@ -235,7 +237,7 @@ func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
 	defer routetimerows.Close()
 	for routetimerows.Next() {
 		var curRow routetime
-		err = routetimerows.Scan(&curRow.route_short_name, &curRow.route_id, &curRow.direction_id, &curRow.trip_id, &curRow.trip_headsign, &curRow.arrival_time, &curRow.stop_code)
+		err = routetimerows.Scan(&curRow.route_short_name, &curRow.route_id, &curRow.direction_id, &curRow.trip_id, &curRow.trip_headsign, &curRow.arrival_time, &curRow.stop_code, &curRow.stop_lat, &curRow.stop_lon)
 		if err != nil {
 			return routetimes, err
 		}
