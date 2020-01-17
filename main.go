@@ -111,25 +111,33 @@ func main() {
 
 	for _, stopTime := range sample {
 
+		arrivalDay := time.Now()
+
 		hourAsInt, err := strconv.Atoi(stopTime.arrival_time[:2])
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		if hourAsInt > 23 {
-			continue
+			hourAsInt = hourAsInt - 24
+			stopTime.arrival_time = fmt.Sprintf("0%v:%v", hourAsInt, stopTime.arrival_time[3:])
+			arrivalDay = arrivalDay.AddDate(0, 0, 1)
 		}
 
-		now := time.Now()
+		zone, _ := arrivalDay.Zone()
 
-		arrival, err := time.Parse("2006-01-02 15:04:05 MST", now.Format("2006-01-02 ")+stopTime.arrival_time+" EDT")
+		arrival, err := time.Parse("2006-01-02 15:04:05 MST", arrivalDay.Format("2006-01-02 ")+stopTime.arrival_time+" "+zone)
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		checkAt := arrival.Add(-time.Minute * 5)
 
-		if now.Before(checkAt) {
+		if *v {
+			fmt.Printf("%v, %v, %v, %v, check at %v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.arrival_time, checkAt)
+		}
+
+		if time.Now().Before(checkAt) {
 
 			addedToQueue++
 
@@ -217,7 +225,7 @@ func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
         ON stops.stop_id = stop_times.stop_id
         WHERE trips.service_id IN ` + "(?" + strings.Repeat(",?", len(ts)-1) + ")" + `
         AND stop_times.stop_sequence != 1
-        AND stop_times.pickup_type != 1
+        AND stop_times.pickup_type == 0
         ORDER BY RANDOM() LIMIT 10000`
 
 	routetimerows, err := db.Query(routetimequery, ts...)
