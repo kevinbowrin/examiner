@@ -9,7 +9,7 @@ builds:
     goos:
       - windows
       - linux
-      - dawrin
+      - darwin
     goarch:
       - amd64
 archives:
