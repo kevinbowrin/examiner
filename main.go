@@ -98,20 +98,21 @@ func main() {
 		*db = filepath.Join(wd, *db)
 	}
 
-	sample, err := getSampleOfStopTimes(*db)
+	stopTimes, err := getStopTimes(*db)
 	if err != nil {
-		log.Fatalf("Error creating stop times, %v", err)
+		log.Fatalf("Error querying for stop times, %v", err)
 	}
 
 	c := gooctranspoapi.NewConnection(*id, *key)
 
 	var wg sync.WaitGroup
+	var m sync.Mutex
 
 	addedToQueue := 0
 
 	fmt.Println("\"Request Time\",\"Route Number\",\"Headsign\",\"Stop Code\",\"Stop Lat\",\"Stop Lon\",\"Minutes Off Schedule\",\"Adjustment Age\"")
 
-	for _, stopTime := range sample {
+	for _, stopTime := range stopTimes {
 
 		arrivalDay := time.Now()
 
@@ -136,7 +137,7 @@ func main() {
 		checkAt := arrival.Add(-time.Minute * 5)
 
 		if *v {
-			fmt.Printf("%v, %v, %v, %v, check at %v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.arrival_time, checkAt)
+			log.Printf("%v, %v, %v, %v, check at %v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.arrival_time, checkAt)
 		}
 
 		if time.Now().Before(checkAt) {
@@ -145,7 +146,7 @@ func main() {
 
 			wg.Add(1)
 			// Launch a goroutine to fetch the URL.
-			go func(waitUntil time.Time, stopTime routetime) {
+			go func(waitUntil time.Time, stopTime routetime, m *sync.Mutex) {
 				defer wg.Done()
 
 				waitDur := waitUntil.Sub(time.Now())
@@ -173,18 +174,24 @@ func main() {
 							}
 
 							trip := routedirection.Trips[0]
+							m.Lock()
 							if trip.AdjustmentAge > 0 {
 								minus5 := trip.AdjustedScheduleTime - 5
 								fmt.Printf("\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"\n", time.Now().Round(0).Round(time.Second), stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.stop_lat, stopTime.stop_lon, minus5, trip.AdjustmentAge)
 							} else {
 								fmt.Printf("\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"\n", time.Now().Round(0).Round(time.Second), stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.stop_lat, stopTime.stop_lon, "unavailable", "unavailable")
 							}
+							m.Unlock()
 
 						}
 					}
 				}
 
-			}(checkAt, stopTime)
+			}(checkAt, stopTime, &m)
+		}
+
+		if addedToQueue >= 10000 {
+			break
 		}
 
 	}
@@ -196,7 +203,7 @@ func main() {
 	wg.Wait()
 }
 
-func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
+func getStopTimes(dbfilepath string) ([]routetime, error) {
 
 	routetimes := []routetime{}
 
@@ -228,7 +235,7 @@ func getSampleOfStopTimes(dbfilepath string) ([]routetime, error) {
         WHERE trips.service_id IN ` + "(?" + strings.Repeat(",?", len(ts)-1) + ")" + `
         AND stop_times.stop_sequence != 1
         AND stop_times.pickup_type == 0
-        ORDER BY RANDOM() LIMIT 10000`
+        ORDER BY RANDOM()`
 
 	routetimerows, err := db.Query(routetimequery, ts...)
 	if err != nil {
