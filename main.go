@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"io/ioutil"
+	"encoding/json"
 )
 
 type calendarrow struct {
@@ -35,16 +37,22 @@ type calendadaterow struct {
 	exception_type string
 }
 
-type routetime struct {
-	route_short_name string
-	route_id         string
-	direction_id     string
-	trip_id          string
-	trip_headsign    string
-	arrival_time     string
-	stop_code        string
-	stop_lat         string
-	stop_lon         string
+type RouteTime struct {
+	RouteShortName string
+	RouteID         string
+	DirectionID     string
+	TripID          string
+	TripHeadsign    string
+	ArrivalTime     string
+	StopCode        string
+	StopLat         string
+	StopLon         string
+}
+
+type Export struct {
+	Routetime *RouteTime
+        NextTripsForStop *gooctranspoapi.NextTripsForStop
+	RequestedAt time.Time
 }
 
 const (
@@ -106,30 +114,27 @@ func main() {
 	c := gooctranspoapi.NewConnection(*id, *key)
 
 	var wg sync.WaitGroup
-	var m sync.Mutex
 
 	addedToQueue := 0
-
-	fmt.Println("\"Request Time\",\"Route Number\",\"Headsign\",\"Stop Code\",\"Stop Lat\",\"Stop Lon\",\"Minutes Off Schedule\",\"Adjustment Age\"")
 
 	for _, stopTime := range stopTimes {
 
 		arrivalDay := time.Now()
 
-		hourAsInt, err := strconv.Atoi(stopTime.arrival_time[:2])
+		hourAsInt, err := strconv.Atoi(stopTime.ArrivalTime[:2])
 		if err != nil {
 			log.Fatal(err)
 		}
 
 		if hourAsInt > 23 {
 			hourAsInt = hourAsInt - 24
-			stopTime.arrival_time = fmt.Sprintf("0%v:%v", hourAsInt, stopTime.arrival_time[3:])
+			stopTime.ArrivalTime = fmt.Sprintf("0%v:%v", hourAsInt, stopTime.ArrivalTime[3:])
 			arrivalDay = arrivalDay.AddDate(0, 0, 1)
 		}
 
 		zone, _ := arrivalDay.Zone()
 
-		arrival, err := time.Parse("2006-01-02 15:04:05 MST", arrivalDay.Format("2006-01-02 ")+stopTime.arrival_time+" "+zone)
+		arrival, err := time.Parse("2006-01-02 15:04:05 MST", arrivalDay.Format("2006-01-02 ")+stopTime.ArrivalTime+" "+zone)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -137,7 +142,7 @@ func main() {
 		checkAt := arrival.Add(-time.Minute * 5)
 
 		if *v {
-			log.Printf("%v, %v, %v, %v, check at %v\n", stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.arrival_time, checkAt)
+			log.Printf("%v, %v, %v, %v, check at %v\n", stopTime.RouteShortName, stopTime.TripHeadsign, stopTime.StopCode, stopTime.ArrivalTime, checkAt)
 		}
 
 		if time.Now().Before(checkAt) {
@@ -146,48 +151,42 @@ func main() {
 
 			wg.Add(1)
 			// Launch a goroutine to fetch the URL.
-			go func(waitUntil time.Time, stopTime routetime, m *sync.Mutex) {
+			go func(waitUntil time.Time, stopTime RouteTime) {
 				defer wg.Done()
 
 				waitDur := waitUntil.Sub(time.Now())
 				time.Sleep(waitDur)
 
+				requestedAt := time.Now()
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 
-				nextTrips, err := c.GetNextTripsForStop(ctx, stopTime.route_short_name, stopTime.stop_code)
+				nextTrips, err := c.GetNextTripsForStop(ctx, stopTime.RouteShortName, stopTime.StopCode)
 				if err != nil {
 					log.Printf("Error: %v\n", err)
 					log.Printf("Error: StopTime - %#v\n", stopTime)
 					return
 				}
 
-				for _, routedirection := range nextTrips.RouteDirections {
-					if strings.TrimSpace(routedirection.RouteNo) == strings.TrimSpace(stopTime.route_short_name) &&
-						strings.TrimSpace(routedirection.RouteLabel) == strings.TrimSpace(stopTime.trip_headsign) {
-						if len(routedirection.Trips) > 0 {
-
-							if *v {
-								log.Printf("StopTime: %#v\n", stopTime)
-								log.Printf("RouteDirection: %#v\n", routedirection)
-								log.Printf("Trips: %#v\n", routedirection.Trips)
-							}
-
-							trip := routedirection.Trips[0]
-							m.Lock()
-							if trip.AdjustmentAge > 0 {
-								minus5 := trip.AdjustedScheduleTime - 5
-								fmt.Printf("\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"\n", time.Now().Round(0).Round(time.Second), stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.stop_lat, stopTime.stop_lon, minus5, trip.AdjustmentAge)
-							} else {
-								fmt.Printf("\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\",\"%v\"\n", time.Now().Round(0).Round(time.Second), stopTime.route_short_name, stopTime.trip_headsign, stopTime.stop_code, stopTime.stop_lat, stopTime.stop_lon, "unavailable", "unavailable")
-							}
-							m.Unlock()
-
-						}
-					}
+				ex := Export{
+					Routetime: &stopTime,
+					NextTripsForStop: nextTrips,
+					RequestedAt: requestedAt,
 				}
 
-			}(checkAt, stopTime, &m)
+				json, err := json.MarshalIndent(ex, "", " ")
+				if err != nil {
+					log.Printf("Error: %v\n", err)
+					return
+				}
+
+				err = ioutil.WriteFile(fmt.Sprintf("%v_%v_%v.json", strings.Replace(requestedAt.Format("2006-01-02-150405.000"), ".", "", -1), stopTime.RouteShortName, stopTime.StopCode), json, 0644)
+
+				if err != nil {
+					log.Printf("Error: %v\n", err)
+				}
+
+			}(checkAt, stopTime)
 		}
 
 		if addedToQueue >= 10000 {
@@ -203,13 +202,13 @@ func main() {
 	wg.Wait()
 }
 
-func getStopTimes(dbfilepath string) ([]routetime, error) {
+func getStopTimes(dbfilepath string) ([]RouteTime, error) {
 
-	routetimes := []routetime{}
+	routetimes := []RouteTime{}
 
 	todayServices, err := getTodaysServices(dbfilepath)
 	if err != nil {
-		return []routetime{}, err
+		return routetimes, err
 	}
 
 	db, err := sql.Open("sqlite3", dbfilepath)
@@ -243,8 +242,8 @@ func getStopTimes(dbfilepath string) ([]routetime, error) {
 	}
 	defer routetimerows.Close()
 	for routetimerows.Next() {
-		var curRow routetime
-		err = routetimerows.Scan(&curRow.route_short_name, &curRow.route_id, &curRow.direction_id, &curRow.trip_id, &curRow.trip_headsign, &curRow.arrival_time, &curRow.stop_code, &curRow.stop_lat, &curRow.stop_lon)
+		var curRow RouteTime
+		err = routetimerows.Scan(&curRow.RouteShortName, &curRow.RouteID, &curRow.DirectionID, &curRow.TripID, &curRow.TripHeadsign, &curRow.ArrivalTime, &curRow.StopCode, &curRow.StopLat, &curRow.StopLon)
 		if err != nil {
 			return routetimes, err
 		}
