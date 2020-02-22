@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/transitreport/gooctranspoapi"
+	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -14,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"io/ioutil"
-	"encoding/json"
 )
 
 type calendarrow struct {
@@ -39,20 +39,20 @@ type calendadaterow struct {
 
 type RouteTime struct {
 	RouteShortName string
-	RouteID         string
-	DirectionID     string
-	TripID          string
-	TripHeadsign    string
-	ArrivalTime     string
-	StopCode        string
-	StopLat         string
-	StopLon         string
+	RouteID        string
+	DirectionID    string
+	TripID         string
+	TripHeadsign   string
+	ArrivalTime    string
+	StopCode       string
+	StopLat        string
+	StopLon        string
 }
 
 type Export struct {
-	Routetime *RouteTime
-        NextTripsForStop *gooctranspoapi.NextTripsForStop
-	RequestedAt time.Time
+	Routetime        *RouteTime
+	NextTripsForStop *gooctranspoapi.NextTripsForStop
+	RequestedAt      time.Time
 }
 
 const (
@@ -163,27 +163,27 @@ func main() {
 
 				nextTrips, err := c.GetNextTripsForStop(ctx, stopTime.RouteShortName, stopTime.StopCode)
 				if err != nil {
-					log.Printf("Error: %v\n", err)
-					log.Printf("Error: StopTime - %#v\n", stopTime)
+					log.Printf("API Error: %v\n", err)
+					log.Printf("API Error: StopTime - %#v\n", stopTime)
 					return
 				}
 
 				ex := Export{
-					Routetime: &stopTime,
+					Routetime:        &stopTime,
 					NextTripsForStop: nextTrips,
-					RequestedAt: requestedAt,
+					RequestedAt:      requestedAt,
 				}
 
 				json, err := json.MarshalIndent(ex, "", " ")
 				if err != nil {
-					log.Printf("Error: %v\n", err)
+					log.Printf("JSON Marshal Error: %v\n", err)
 					return
 				}
 
-				err = ioutil.WriteFile(fmt.Sprintf("%v_%v_%v.json", strings.Replace(requestedAt.Format("2006-01-02-150405.000"), ".", "", -1), stopTime.RouteShortName, stopTime.StopCode), json, 0644)
+				err = ioutil.WriteFile(fmt.Sprintf("%v_%v_%v.json", requestedAt.Format("2006-01-02-150405"), stopTime.RouteShortName, stopTime.StopCode), json, 0644)
 
 				if err != nil {
-					log.Printf("Error: %v\n", err)
+					log.Printf("WriteFile Error: %v\n", err)
 				}
 
 			}(checkAt, stopTime)
